@@ -1,0 +1,36 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: servicedesk
+      POSTGRES_PASSWORD: servicedesk
+      POSTGRES_DB: voice_service_desk
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U servicedesk -d voice_service_desk"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://servicedesk:servicedesk@db:5432/voice_service_desk
+      HOST: 0.0.0.0
+      LLM_BASE_URL: ${DOCKER_LLM_BASE_URL:-${LLM_BASE_URL}}
+    ports:
+      - "127.0.0.1:3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  pgdata:

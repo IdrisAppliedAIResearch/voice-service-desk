@@ -1,0 +1,13 @@
+{
+  "name": "@vsd/api",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fastify/websocket": "^11.3",
+    "@vsd/agent": "workspace:*",
+    "@vsd/db": "workspace:*",
+    "@vsd/speech": "workspace:*",
+    "fastify": "^5.12",
+    "zod": "^4.6"
+  }
+}

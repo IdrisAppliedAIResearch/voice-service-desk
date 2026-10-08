@@ -1,0 +1,13 @@
+{
+  "name": "@vsd/rag",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "openai": "^5.23.2",
+    "pg": "^8.23",
+    "yaml": "^2.9"
+  }
+}

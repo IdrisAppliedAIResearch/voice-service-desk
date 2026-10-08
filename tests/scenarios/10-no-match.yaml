@@ -1,0 +1,30 @@
+# Proves a question the knowledge base cannot answer gets no articles rather than a guess: the query shares a word
+# with the knowledge base but scores under RAG_MIN_SCORE, so the threshold itself drops it, the session moves to
+# no_match, and when the caller accepts the offer the ticket opened for this session is linked to no account.
+local: true
+steps:
+  - caller: Who won the football game last night?
+    model:
+      - tool: { name: start_pipeline, args: { name: general_help } }
+      - tool: { name: search_kb, args: { query: who won the football game last night } }
+      - say: I couldn't find anything about that in our knowledge base. Would you like me to open a ticket?
+    expect:
+      events: [start_pipeline started, search_kb no_match]
+      offered:
+        - [start_pipeline, escalate, end_call]
+        - [search_kb, create_ticket, escalate, end_call]
+        - [create_ticket, escalate, end_call]
+      session: { pipeline: general_help, state: no_match }
+      kb: { below_threshold: true }
+
+  - caller: Yes, please open a ticket.
+    model:
+      - tool:
+          name: create_ticket
+          args: { priority: P4, category: general, summary: Caller asked about a football game, which the knowledge base does not cover }
+      - say: I opened a ticket and someone will follow up. Is there anything else?
+    expect:
+      events: [create_ticket created]
+      session: { pipeline: general_help, state: no_match, verified: false }
+      tickets: [P4 general unlinked]
+      outbox: []

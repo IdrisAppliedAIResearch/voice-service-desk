@@ -1,0 +1,20 @@
+# Proves a VPN question in general help is answered from the knowledge base with the current GlobalProtect article,
+# while the older conflicting AnyConnect article never reaches the model, and that a model reply full of markdown and
+# a URL reaches the caller as plain speakable text.
+local: true
+steps:
+  - caller: How do I connect to the VPN from home?
+    model:
+      - tool: { name: search_kb, args: { query: how do I connect to the VPN from home } }
+      - say: |-
+          **Use GlobalProtect.** Here is how:
+          1. Open the *GlobalProtect* app and enter `vpn.contoso-health.example` as the portal.
+          2. Sign in with your work account and approve the MFA prompt.
+          Full guide: https://kb.contoso-health.example/vpn
+    expect:
+      events: [prerouter start_pipeline general_help, search_kb match]
+      offered: [[search_kb, create_ticket, start_pipeline, escalate, end_call], [create_ticket, start_pipeline, escalate, end_call]]
+      session: { pipeline: general_help, state: answer, verified: false }
+      kb: { includes: [vpn-setup-globalprotect], excludes: [vpn-setup-anyconnect] }
+      tickets: []
+      outbox: []

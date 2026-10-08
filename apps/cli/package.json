@@ -1,0 +1,10 @@
+{
+  "name": "@vsd/cli",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@vsd/agent": "workspace:*",
+    "@vsd/db": "workspace:*",
+    "@vsd/speech": "workspace:*"
+  }
+}

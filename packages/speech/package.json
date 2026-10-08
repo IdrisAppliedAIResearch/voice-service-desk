@@ -1,0 +1,12 @@
+{
+  "name": "@vsd/speech",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-polly": "^3",
+    "@aws-sdk/client-transcribe-streaming": "^3"
+  }
+}

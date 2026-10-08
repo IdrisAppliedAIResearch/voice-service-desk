@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Service Desk</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.45 system-ui, sans-serif; }
+  body { max-width: 960px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  h1 { flex: 1; margin: 0; font-size: 1.2rem; }
+  h2 { margin: 16px 0 8px; font-size: .8rem; letter-spacing: .05em; text-transform: uppercase; opacity: .7; }
+  button, input { font: inherit; padding: 6px 12px; }
+  #state { padding: 4px 10px; border-radius: 999px; background: #8883; font: 13px ui-monospace, monospace; }
+  main { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+  section { min-width: 0; }
+  #transcript, #log { height: 55vh; overflow-y: auto; margin: 0; padding: 8px; border: 1px solid #8886; border-radius: 8px; }
+  #transcript p { margin: 0 0 8px; }
+  #log { list-style: none; font: 12px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+  .partial, .note { font-style: italic; opacity: .6; }
+  .error { color: #d33; }
+  form { display: flex; gap: 8px; margin-top: 8px; }
+  form input { flex: 1; min-width: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Contoso Health service desk</h1>
+  <span id="state">disconnected</span>
+  <button id="call">Start call</button>
+  <button id="mic" disabled>Start mic</button>
+</header>
+<main>
+  <section>
+    <h2>Transcript</h2>
+    <div id="transcript"></div>
+    <form id="form">
+      <input id="text" maxlength="2000" autocomplete="off" placeholder="Type instead of speaking" disabled>
+      <button id="send" disabled>Send</button>
+    </form>
+  </section>
+  <section>
+    <h2>Events</h2>
+    <ul id="log"></ul>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const PCM16_WORKLET = `registerProcessor('pcm16', class extends AudioWorkletProcessor {
+  step = sampleRate / 16000; t = 0; sum = 0; n = 0; out = [];
+  process([input]) {
+    for (const s of input[0] ?? []) {
+      this.sum += s;
+      this.n++;
+      if (++this.t >= this.step) {
+        this.t -= this.step;
+        this.out.push(Math.max(-1, Math.min(1, this.sum / this.n)) * 32767);
+        this.sum = this.n = 0;
+      }
+    }
+    if (this.out.length >= 1600) {
+      const pcm = Int16Array.from(this.out);
+      this.port.postMessage(pcm.buffer, [pcm.buffer]);
+      this.out = [];
+    }
+    return true;
+  }
+});`;
+let ws, ctx, worklet, mic, partial, playAt = 0;
+
+function append(list, text, className = '') {
+  const el = list.appendChild(document.createElement(list.tagName === 'UL' ? 'li' : 'p'));
+  el.textContent = text;
+  el.className = className;
+  list.scrollTop = list.scrollHeight;
+  return el;
+}
+
+function showTranscript({ text, final }) {
+  partial ??= append($('transcript'), '');
+  partial.textContent = `You: ${text}`;
+  partial.className = final ? '' : 'partial';
+  partial.scrollIntoView({ block: 'nearest' });
+  if (final) partial = undefined;
+}
+
+function onEvent(m) {
+  append($('log'), JSON.stringify(m), m.type === 'error' ? 'error' : '');
+  if (m.type === 'session') {
+    for (const id of ['text', 'send']) $(id).disabled = false;
+    $('mic').disabled = !m.audio;
+    if (!m.audio) append($('transcript'), 'This server has no speech recognition (STT_PROVIDER=text), so type in the box below.', 'note');
+    $('state').textContent = 'connected';
+  }
+  if (m.type === 'transcript') showTranscript(m);
+  if (m.type === 'reply') append($('transcript'), `Agent: ${m.text}`);
+  if (m.type === 'state') $('state').textContent = `${m.pipeline} / ${m.state} (${m.status})`;
+}
+
+function play(data) {
+  const samples = new Int16Array(data);
+  const buffer = ctx.createBuffer(1, samples.length, 16000);
+  buffer.getChannelData(0).set(Float32Array.from(samples, (s) => s / 32768));
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  playAt = Math.max(playAt, ctx.currentTime);
+  source.start(playAt);
+  playAt += buffer.duration;
+}
+
+async function startMic() {
+  worklet ??= ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([PCM16_WORKLET], { type: 'text/javascript' })));
+  await worklet;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  });
+  const source = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, 'pcm16');
+  node.port.onmessage = ({ data }) => {
+    if (ws?.readyState === WebSocket.OPEN) ws.send(ctx.currentTime < playAt ? new ArrayBuffer(data.byteLength) : data);
+  };
+  source.connect(node).connect(ctx.destination);
+  mic = { stream, source, node };
+  $('mic').textContent = 'Stop mic';
+}
+
+function stopMic() {
+  mic?.stream.getTracks().forEach((track) => track.stop());
+  mic?.source.disconnect();
+  mic?.node.disconnect();
+  mic = undefined;
+  $('mic').textContent = 'Start mic';
+}
+
+$('call').onclick = async () => {
+  if (ws) return ws.close();
+  ctx ??= new AudioContext();
+  await ctx.resume();
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/voice`);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = ({ data }) => (typeof data === 'string' ? onEvent(JSON.parse(data)) : play(data));
+  ws.onclose = ({ code }) => {
+    append($('log'), `disconnected (${code})`);
+    stopMic();
+    ws = undefined;
+    for (const id of ['mic', 'text', 'send']) $(id).disabled = true;
+    $('call').textContent = 'Start call';
+    $('state').textContent = 'disconnected';
+  };
+  $('call').textContent = 'End call';
+};
+
+$('mic').onclick = () => (mic ? stopMic() : startMic().catch((e) => append($('log'), `microphone: ${e.message}`, 'error')));
+
+$('form').onsubmit = (e) => {
+  e.preventDefault();
+  const text = $('text').value.trim();
+  if (text) ws?.send(JSON.stringify({ type: 'text', text }));
+  $('text').value = '';
+};
+</script>
+</body>
+</html>

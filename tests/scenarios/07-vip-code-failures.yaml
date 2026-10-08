@@ -1,0 +1,60 @@
+# Proves an executive who passes the questions and the PIN but reads back a wrong one-time code twice is stopped:
+# the session locks, the engagement ticket is raised to P1 in executive-support, no password is sent (only the code
+# SMS is in the outbox) and the account is locked for 15 minutes but otherwise left as it was.
+user: rcastellano
+local: true
+steps:
+  - caller: I need my password reset. My employee ID is {{employee_id}}.
+    model:
+      - tool: { name: get_next_security_question }
+      - say: I can help. First, a security question.
+    expect:
+      events: [prerouter vip_handoff vip, get_next_security_question asked]
+      session: { pipeline: vip, state: await_answer }
+      tickets: [P3 executive-support linked]
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is one more question.
+    expect:
+      events: [verify_security_answer pass, get_next_security_question asked]
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - say: Thank you. Now please say your six-digit PIN.
+    expect:
+      events: [verify_security_answer complete]
+      session: { state: collect_pin }
+
+  - caller: '{{pin}}'
+    model:
+      - tool: { name: verify_vip_pin, args: { pin: '{{pin}}' } }
+      - tool: { name: send_one_time_code }
+      - say: I texted a one-time code to the phone number on file. Please read it back to me.
+    expect:
+      events: [verify_vip_pin pass, send_one_time_code sent]
+      session: { state: await_code, verified: false }
+
+  - caller: '{{wrong_otp}}'
+    model:
+      - tool: { name: verify_one_time_code, args: { code: '{{wrong_otp}}' } }
+      - say: That code didn't match. Please read it to me again.
+    expect:
+      events: [verify_one_time_code fail]
+      session: { state: await_code, status: active, verified: false }
+
+  - caller: '{{wrong_otp}}'
+    model:
+      - tool: { name: verify_one_time_code, args: { code: '{{wrong_otp}}' } }
+      - say: I couldn't complete verification. The support team will call you back at the number on file.
+    expect:
+      events: [verify_one_time_code locked_out]
+      offered: [[verify_one_time_code, send_one_time_code], [end_call]]
+      session: { pipeline: vip, state: failed, status: [locked, ended], verified: false }
+      tickets: [P1 executive-support linked]
+      outbox: [sms ***-***-1844]
+      user: { must_change_password: false, is_locked: true, locked_until: 15 }
+      audit: { present: [vip_verification_failed], absent: [password_reset] }

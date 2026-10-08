@@ -1,0 +1,14 @@
+{
+  "name": "@vsd/db",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.2",
+    "@vsd/rag": "workspace:*",
+    "node-pg-migrate": "^8.0.4",
+    "pg": "^8.23"
+  }
+}

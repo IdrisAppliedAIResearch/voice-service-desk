@@ -1,0 +1,16 @@
+{
+  "name": "@vsd/agent",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@vsd/db": "workspace:*",
+    "@vsd/pipelines": "workspace:*",
+    "@vsd/rag": "workspace:*",
+    "openai": "^5.23.2",
+    "yaml": "^2.9.1",
+    "zod": "^4.6"
+  }
+}

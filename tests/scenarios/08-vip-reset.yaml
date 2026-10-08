@@ -1,0 +1,53 @@
+# Proves an executive who passes the questions, the PIN and the one-time code gets a password reset sent to their
+# email, their mobile and their executive assistant's phone, that must_change_password is set, and that the engagement
+# ticket records the call even though it succeeded.
+user: ewhitaker
+local: true
+steps:
+  - caller: I need my password reset. My employee ID is {{employee_id}}.
+    model:
+      - tool: { name: get_next_security_question }
+      - say: I can help. First, a security question.
+    expect:
+      events: [prerouter vip_handoff vip, get_next_security_question asked]
+      session: { pipeline: vip, state: await_answer }
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is one more question.
+    expect:
+      events: [verify_security_answer pass, get_next_security_question asked]
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - say: Thank you. Now please say your six-digit PIN.
+    expect:
+      events: [verify_security_answer complete]
+      session: { state: collect_pin, verified: false }
+
+  - caller: '{{pin}}'
+    model:
+      - tool: { name: verify_vip_pin, args: { pin: '{{pin}}' } }
+      - tool: { name: send_one_time_code }
+      - say: I texted a one-time code to the phone number on file. Please read it back to me.
+    expect:
+      events: [verify_vip_pin pass, send_one_time_code sent]
+      session: { state: await_code, verified: false }
+
+  - caller: '{{otp}}'
+    model:
+      - tool: { name: verify_one_time_code, args: { code: '{{otp}}' } }
+      - tool: { name: reset_password }
+      - say: >-
+          Done. A temporary password went to your email, your mobile phone and your executive assistant, and you'll
+          change it at your next sign-in. Is there anything else?
+    expect:
+      events: [verify_one_time_code pass, reset_password done]
+      session: { pipeline: vip, state: verified, status: active, verified: true }
+      outbox: [sms ***-***-2968, email el***, sms ***-***-4044, sms ***-***-2111]
+      tickets: [P3 executive-support linked]
+      user: { must_change_password: true, is_locked: false }
+      audit: { present: [vip_handoff, otp_sent, password_reset] }

@@ -1,0 +1,61 @@
+# Proves malformed model output never breaks a call: plain text and then truncated JSON give one retry and then code
+# asks again (here by repeating the pending security question) with no state change, the next turn works, a malformed
+# reply followed by a valid retry goes ahead, and the call still ends cleanly. Depends on scripted model misbehavior,
+# so it is not run against a real model.
+user: efoster
+local: false
+steps:
+  - caller: I forgot my password. My username is {{username}}.
+    model:
+      - tool: { name: lookup_account, args: { identifier: '{{username}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is your first security question.
+    expect:
+      events: [prerouter start_pipeline password_reset, lookup_account found, get_next_security_question asked]
+      session: { pipeline: password_reset, state: await_answer }
+
+  - caller: '{{answer}}'
+    model:
+      - raw: Sure, let me check that answer for you.
+      - raw: '{"say": "Checking", "tool": {"name": "verify_security_answer", "args": {"answer": '
+    expect:
+      events: [llm_retry, fallback]
+      fallback_reply: true
+      offered: [[verify_security_answer], [verify_security_answer]]
+      session: { pipeline: password_reset, state: await_answer, status: active, verified: false, failed_attempts: 0 }
+      audit: { present: [llm_malformed] }
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - tool: { name: get_next_security_question }
+      - say: That's right. Here is the next question.
+    expect:
+      events: [verify_security_answer pass, get_next_security_question asked]
+      session: { state: await_answer, failed_attempts: 0 }
+
+  - caller: '{{answer}}'
+    model:
+      - raw: |-
+          ```json
+          {"say": "", "tool": {"name": "verify_security_answer"}}
+          ```
+      - raw: '{"say": "", "tool": {"name": "verify_security_answer", "args": {"answer": "{{answer}}"}}}'
+      - tool: { name: reset_password }
+      - say: Done. A temporary password went to your email and mobile phone, and you'll change it at your next sign-in.
+    expect:
+      events: [verify_security_answer invalid_args, llm_retry, verify_security_answer complete, reset_password done]
+      session: { pipeline: password_reset, state: done, verified: true }
+      outbox: [email em***, sms ***-***-4997]
+      user: { must_change_password: true }
+
+  - caller: No, that's all. Thanks!
+    model:
+      - tool: { name: end_call, args: { summary: Password reset completed } }
+      - say: You're welcome. Goodbye.
+    expect:
+      events: [end_call ended]
+      session: { status: ended }
+
+  - caller: Wait, one more thing.
+    expect_error: SessionClosedError

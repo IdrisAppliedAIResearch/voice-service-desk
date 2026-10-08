@@ -1,0 +1,35 @@
+{
+  "name": "voice-service-desk",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "tsx apps/api/src/main.ts",
+    "dev": "tsx watch apps/api/src/main.ts",
+    "chat": "tsx apps/cli/src/main.ts",
+    "outbox": "tsx apps/cli/src/outbox.ts",
+    "migrate": "tsx packages/db/src/migrate.ts",
+    "seed": "tsx packages/db/src/seed.ts",
+    "test": "vitest run --project unit",
+    "test:scenarios": "vitest run --project scenarios",
+    "test:scenarios:local": "tsx tests/scenarios/local-report.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20",
+    "@types/pg": "^8",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.7",
+    "yaml": "^2.9"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

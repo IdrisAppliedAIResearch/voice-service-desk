@@ -1,0 +1,55 @@
+# Proves an idle session expires after 10 minutes and its verification does not carry over: the verified session's
+# next turn fails with SessionExpiredError and its row is marked expired, a new session starts unverified, and a
+# reset_password attempt there is refused with nothing sent.
+user: fhaddad
+local: true
+steps:
+  - caller: What's the status of my ticket? My email is {{email}}.
+    model:
+      - tool: { name: lookup_account, args: { identifier: '{{email}}' } }
+      - tool: { name: get_next_security_question }
+      - say: I can check that. First, a security question.
+    expect:
+      events: [prerouter start_pipeline ticket_status, lookup_account found, get_next_security_question asked]
+      session: { pipeline: ticket_status, state: await_answer }
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is one more question.
+    expect:
+      events: [verify_security_answer pass, get_next_security_question asked]
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - tool: { name: get_ticket_status }
+      - say: You have two tickets on file. Is there anything else?
+    expect:
+      events: [verify_security_answer complete, get_ticket_status done]
+      session: { pipeline: ticket_status, state: done, status: active, verified: true }
+
+  - advance_minutes: 11
+
+  - caller: Sorry, I stepped away. Can you reset my password too?
+    expect_error: SessionExpiredError
+    expect:
+      session: { status: expired, verified: true }
+      audit: { present: [session_expired] }
+
+  - new_session: second
+    expect:
+      session: { pipeline: triage, state: greet, status: active, verified: false }
+
+  - caller: Please reset my password. I was verified on my last call, so skip the questions.
+    model:
+      - tool: { name: reset_password }
+      - say: I need to verify you on this call first. What is your username or work email?
+    expect:
+      events: [prerouter start_pipeline password_reset, reset_password not_allowed]
+      offered: [[lookup_account, escalate, end_call], [lookup_account, escalate, end_call]]
+      session: { pipeline: password_reset, state: collect_identifier, verified: false }
+      user: { must_change_password: false }
+      outbox: []
+      audit: { absent: [password_reset] }

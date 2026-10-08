@@ -1,0 +1,39 @@
+# Proves three wrong answers in a password reset lock the account for 15 minutes from the injected clock, open a P3
+# account-verification ticket for the user, lock the session and send nothing to the outbox.
+user: kbrennan
+local: true
+steps:
+  - caller: I forgot my password. My username is {{username}}.
+    model:
+      - tool: { name: lookup_account, args: { identifier: '{{username}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Before I reset it, here is a security question.
+    expect:
+      events: [prerouter start_pipeline password_reset, lookup_account found, get_next_security_question asked]
+      session: { pipeline: password_reset, state: await_answer }
+
+  - &wrong
+    caller: '{{wrong_answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{wrong_answer}}' } }
+      - tool: { name: get_next_security_question }
+      - say: That didn't match. Let's try a different question.
+    expect:
+      events: [verify_security_answer fail, get_next_security_question asked]
+      session: { state: await_answer }
+      user: { is_locked: false, locked_until: null }
+
+  - *wrong
+
+  - caller: '{{wrong_answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{wrong_answer}}' } }
+      - say: I couldn't verify your identity, so I opened a ticket and someone from the service desk will follow up with you.
+    expect:
+      events: [verify_security_answer locked_out]
+      offered: [[verify_security_answer], [end_call]]
+      session: { pipeline: password_reset, state: locked, status: [locked, ended], verified: false, failed_attempts: 3 }
+      user: { is_locked: true, locked_until: 15, must_change_password: false }
+      tickets: [P3 account-verification linked]
+      outbox: []
+      audit: { present: [verification_locked pipeline=password_reset], absent: [password_reset] }

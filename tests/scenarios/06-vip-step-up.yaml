@@ -1,0 +1,77 @@
+# Proves an executive who gives their employee ID while asking a VPN question is silently handed to the VIP pipeline
+# with an engagement ticket, and that every factor is required in order: search_kb and reset_password are refused
+# before verification, the PIN is refused during the questions, a code is refused before the PIN, the session is
+# verified only after questions, PIN and one-time code, and only then does search_kb run.
+user: amehta
+local: true
+steps:
+  - caller: Hi, my VPN keeps dropping when I work from home. My employee ID is {{employee_id}} and my PIN is {{pin}}.
+    model:
+      - tool: { name: search_kb, args: { query: VPN keeps dropping when working from home } }
+      - tool: { name: reset_password }
+      - tool: { name: get_next_security_question }
+      - say: I can help with that. First I need to confirm who I'm speaking with, so here is a security question.
+    expect:
+      events: [prerouter vip_handoff vip, search_kb not_allowed, reset_password not_allowed, get_next_security_question asked]
+      offered: [[get_next_security_question], [get_next_security_question], [get_next_security_question], []]
+      session: { pipeline: vip, state: await_answer, verified: false }
+      tickets: [P3 executive-support linked]
+      audit: { present: [vip_handoff] }
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - tool: { name: verify_vip_pin, args: { pin: '{{pin}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is one more question.
+    expect:
+      events: [verify_security_answer pass, verify_vip_pin not_allowed, get_next_security_question asked]
+      session: { state: await_answer, verified: false }
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - say: Thank you. Now please say your six-digit PIN.
+    expect:
+      events: [verify_security_answer complete]
+      session: { state: collect_pin, verified: false }
+
+  - caller: I already gave you my PIN. Just text me the code.
+    model:
+      - tool: { name: send_one_time_code }
+      - say: I need you to say your PIN on this step before I can text a code.
+    expect:
+      events: [send_one_time_code not_allowed]
+      offered: [[verify_vip_pin], []]
+      session: { state: collect_pin, verified: false }
+      outbox: []
+
+  - caller: '{{pin}}'
+    model:
+      - tool: { name: verify_vip_pin, args: { pin: '{{pin}}' } }
+      - tool: { name: send_one_time_code }
+      - say: Thanks. I texted a one-time code to the phone number on file. Please read it back to me.
+    expect:
+      events: [verify_vip_pin pass, send_one_time_code sent]
+      offered: [[verify_vip_pin], [send_one_time_code], []]
+      session: { state: await_code, verified: false }
+
+  - caller: '{{otp}}'
+    model:
+      - tool: { name: verify_one_time_code, args: { code: '{{otp}}' } }
+      - tool: { name: search_kb, args: { query: VPN keeps dropping when working from home } }
+      - say: >-
+          Thanks, you're verified. If the VPN keeps dropping, quit GlobalProtect, reconnect to a stable network and
+          sign in again. If it still drops, I can open a ticket for you.
+    expect:
+      events: [verify_one_time_code pass, search_kb match]
+      offered:
+        - [verify_one_time_code, send_one_time_code]
+        - [reset_password, recover_username, get_ticket_status, search_kb, create_ticket, escalate, end_call]
+        - [reset_password, recover_username, get_ticket_status, create_ticket, escalate, end_call]
+      session: { pipeline: vip, state: verified, status: active, verified: true }
+      kb: { includes: [vpn-setup-globalprotect], excludes: [vpn-setup-anyconnect] }
+      tickets: [P3 executive-support linked]
+      outbox: [sms ***-***-5562]
+      user: { must_change_password: false }
+      audit: { present: [otp_sent], absent: [password_reset] }

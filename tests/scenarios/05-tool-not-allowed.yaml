@@ -1,0 +1,39 @@
+# Proves a model that calls reset_password while the agent waits for a security answer is refused: the call is not
+# executed, a tool_not_allowed audit row records the state it came from, nothing is reset or sent, and the next turn
+# carries on with the questions as normal. Depends on scripted model misbehavior, so it is not run against a real model.
+user: zkim
+local: false
+steps:
+  - caller: I forgot my password. My username is {{username}}.
+    model:
+      - tool: { name: lookup_account, args: { identifier: '{{username}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is your first security question.
+    expect:
+      events: [prerouter start_pipeline password_reset, lookup_account found, get_next_security_question asked]
+      session: { pipeline: password_reset, state: await_answer }
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: reset_password }
+      - say: Sorry, could you give me that answer again?
+    expect:
+      events: [reset_password not_allowed]
+      offered: [[verify_security_answer], []]
+      session: { pipeline: password_reset, state: await_answer, status: active, verified: false, failed_attempts: 0 }
+      audit:
+        present: [tool_not_allowed name=reset_password state=await_answer]
+        absent: [password_reset, gate_denied]
+      user: { must_change_password: false, is_locked: false, locked_until: null }
+      outbox: []
+
+  - caller: '{{answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{answer}}' } }
+      - tool: { name: get_next_security_question }
+      - say: That's right. Here is the next question.
+    expect:
+      events: [verify_security_answer pass, get_next_security_question asked]
+      offered: [[verify_security_answer], [get_next_security_question], []]
+      session: { pipeline: password_reset, state: await_answer, verified: false, failed_attempts: 0 }
+      outbox: []

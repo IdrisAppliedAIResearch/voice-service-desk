@@ -1,0 +1,72 @@
+# Proves username recovery for an email with no account looks exactly like recovery for a real account when the caller
+# gives the same wrong answers: the same tools with the same outcomes, the same lookup and verify results, questions
+# from the same pool, the same lockout with a P3 ticket, nothing sent, and nothing that names the real user. Only the
+# real account is locked for 15 minutes, which the caller cannot see.
+user: jwashington
+local: true
+steps:
+  - &ask
+    caller: Hi, I forgot my username.
+    model:
+      - say: I can help with that. What is your work email or employee ID?
+    expect:
+      events: [prerouter start_pipeline username_recovery]
+      session: { pipeline: username_recovery, state: collect_identifier }
+
+  - caller: It's jordan.ellis@contoso-health.example.
+    model:
+      - tool: { name: lookup_account, args: { identifier: jordan.ellis@contoso-health.example } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is a security question.
+    expect: &found
+      events: [lookup_account found, get_next_security_question asked]
+      session: { state: await_answer }
+
+  - &wrong
+    caller: '{{wrong_answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{wrong_answer}}' } }
+      - tool: { name: get_next_security_question }
+      - say: That didn't match. Let's try another question.
+    expect:
+      events: [verify_security_answer fail, get_next_security_question asked]
+
+  - *wrong
+
+  - &locked
+    caller: '{{wrong_answer}}'
+    model:
+      - tool: { name: verify_security_answer, args: { answer: '{{wrong_answer}}' } }
+      - say: I couldn't verify your identity, so I opened a ticket and someone will follow up with you.
+    expect:
+      events: [verify_security_answer locked_out]
+      session: { pipeline: username_recovery, state: locked, status: [locked, ended], verified: false }
+
+  - expect:
+      tickets: [P3 account-verification unlinked]
+      audit: { present: [verification_locked pipeline=username_recovery] }
+      questions_from_pool: true
+      outbox: []
+
+  - new_session: real
+  - *ask
+
+  - caller: It's {{email}}.
+    model:
+      - tool: { name: lookup_account, args: { identifier: '{{email}}' } }
+      - tool: { name: get_next_security_question }
+      - say: Thanks. Here is a security question.
+    expect: *found
+
+  - *wrong
+  - *wrong
+  - *locked
+
+  - expect:
+      tickets: [P3 account-verification linked]
+      audit: { present: [verification_locked pipeline=username_recovery] }
+      questions_from_pool: true
+      outbox: []
+      user: { is_locked: true, locked_until: 15, must_change_password: false }
+      not_mentioned: ['{{username}}', '{{first_name}}', '{{last_name}}', '{{employee_id}}']
+      same_path_as: first
